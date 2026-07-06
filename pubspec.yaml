@@ -1,0 +1,54 @@
+name: thunderpeak
+description: "Thunder Peak - Zeus defends the sacred mountain."
+publish_to: 'none'
+version: 1.0.1+1
+
+environment:
+  sdk: ^3.12.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  webview_flutter: ^4.10.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.4
+
+flutter_launcher_icons:
+  android: "launcher_icon"
+  ios: false
+  image_path: "assets/Icon_padded.png"
+  min_sdk_android: 21
+  adaptive_icon_background: "#4FA3D9"
+  adaptive_icon_foreground: "assets/Icon_padded.png"
+  adaptive_icon_foreground_inset: 0
+  remove_alpha_ios: true
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/Background_OlympusTemple.webp
+    - assets/Background_StormSky.webp
+    - assets/Background_ThunderPeak.webp
+    - assets/Collectible_Ambrosia.webp
+    - assets/Collectible_GoldenCoin.webp
+    - assets/Collectible_Lightning.webp
+    - assets/Enemy_Cyclops.webp
+    - assets/Enemy_Harpy.webp
+    - assets/Enemy_Medusa.webp
+    - assets/Enemy_Minotaur.webp
+    - assets/Game_Name.webp
+    - assets/Hero.webp
+    - assets/Horizontal_Loading.webp
+    - assets/Icon.png
+    - assets/Obstacle_FallingColumn.webp
+    - assets/Obstacle_FireTrap.webp
+    - assets/Obstacle_ThunderCloud.webp
+    - assets/Powerup_DivineShield.webp
+    - assets/Powerup_StormRage.webp
+    - assets/Vertical_Loading.webp
