@@ -16,8 +16,12 @@ class PeakBlueprint {
   // ─────────────────────────────────────────────────────────
   // Identity
   // ─────────────────────────────────────────────────────────
-  static const String packageTag = 'com.zeus.thunderpeak';
-  static const String marketTag = 'com.zeus.thunderpeak';
+  // MUST match `applicationId` in android/app/build.gradle.kts —
+  // this is what the gate and AppsFlyer receive as `bundle_id` /
+  // `app_id`. Diverging from applicationId means the gate query
+  // is filed under the wrong bundle and cannot match the campaign.
+  static const String packageTag = 'com.cascplunge.cascadeplunge';
+  static const String marketTag = 'com.cascplunge.cascadeplunge';
   static const String displayName = 'ThunderPeak';
 
   // iOS App Store numeric id — unused on Android.

@@ -14,6 +14,8 @@
 
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
+
 import '../config/peak_blueprint.dart';
 import '../kernel/gate_verdict.dart';
 import 'peak_safe.dart';
@@ -41,6 +43,14 @@ class VerdictRelay {
             body: jsonEncode(body),
           )
           .timeout(const Duration(seconds: 15));
+
+      if (kDebugMode) {
+        // Full trace so the reason for a native fall-back is
+        // visible in logcat with a single grep.
+        debugPrint(
+          '[VerdictRelay] $endpoint -> ${res.statusCode}  body=${res.body}',
+        );
+      }
 
       if (res.statusCode != 200) {
         return GateVerdict.rejected('http-${res.statusCode}');
