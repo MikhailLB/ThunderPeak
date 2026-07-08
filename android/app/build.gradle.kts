@@ -43,10 +43,7 @@ android {
     }
 
     defaultConfig {
-        // Application id for Play (Store bundle). Internal Kotlin/Java
-        // namespace stays as `com.zeus.thunderpeak` — Play only sees
-        // applicationId, and renaming source folders is unnecessary.
-        applicationId = "com.cascplunge.cascadeplunge"
+        applicationId = "com.zeus.thunderpeak"
         minSdk = 30
         targetSdk = 35
         versionCode = flutter.versionCode
