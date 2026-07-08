@@ -9,12 +9,18 @@
 // This is the direct implementation of the state machine documented
 // in `.cursor/rules/android_gray_guide.md § "Gray Flow State Machine"`.
 //
-// FIRST-LAUNCH UX INVARIANT
-// -------------------------
-// If the device is offline on the FIRST launch, `_firstAscent` short-
-// circuits to `_toOffline()` BEFORE `TraceOracle.ignite()` is awaited.
-// The user sees the offline hatch on frame 1 and Retry restarts the
-// full pipeline from `AscentRouter.initState`.
+// "ALWAYS ASK, NEVER REMEMBER"
+// ----------------------------
+// The router does NOT read the persisted SummitRoute on cold start.
+// Every launch — regardless of yesterday's verdict — runs the full
+// pipeline: AppsFlyer ignite → attribution → POST /config.php →
+// gray-or-native. Nothing here permanently locks the install into
+// the native game: the server is the single source of truth on
+// every start.
+//
+// Offline handling is baked into the unified pipeline `_runGate()`:
+// no network → try the last cached gray URL; if there is none, go
+// native. The user never sees an "offline retry" wall.
 //
 // PROGRESS BAR CONTRACT
 // ---------------------
@@ -47,7 +53,6 @@ import 'package:flutter/services.dart';
 
 import '../config/peak_art.dart';
 import '../config/peak_blueprint.dart';
-import '../gray_veil/offline_hatch.dart';
 import '../gray_veil/push_invite_stage.dart';
 import '../gray_veil/web_arena.dart';
 import '../kernel/gate_verdict.dart';
@@ -180,22 +185,21 @@ class _AscentRouterState extends State<AscentRouter>
       return;
     }
 
-    final SummitRoute route = widget.safe.readRoute();
-    debugPrint('[GRAY][ROUTER] persisted route = $route');
-    switch (route) {
-      case SummitRoute.ascent:
-        debugPrint('[GRAY][ROUTER] ascent → native menu');
-        await _goNative();
-        break;
-      case SummitRoute.gray:
-        debugPrint('[GRAY][ROUTER] gray → resumeGray()');
-        await _resumeGray();
-        break;
-      case SummitRoute.pending:
-        debugPrint('[GRAY][ROUTER] pending → firstAscent()');
-        await _firstAscent();
-        break;
-    }
+    // ── UNCONDITIONAL GATE PIPELINE ────────────────────────────
+    // No matter what was persisted last time, always ask the server.
+    // The user's requirement: "config always queries status, never
+    // remembers one". So there is intentionally NO short-circuit on
+    // a persisted "ascent" decision here — we always run the full
+    // attribution + POST /config.php cycle on every cold launch.
+    // The only prior-state that DOES win is:
+    //   (a) an inbound OneLink / thunderpeak:// URI (handled above),
+    //   (b) a push cold-tap URL (handled above),
+    //   (c) offline mode with a cached URL from a previous gray
+    //       session — used only when the network is down so the
+    //       user isn't dumped into the game while their Wi-Fi
+    //       cycles.
+    debugPrint('[GRAY][ROUTER] running gate pipeline (no persisted skip)');
+    await _runGate();
   }
 
   /// Zero-ceremony route to the WebView used only by the cold-tap
@@ -359,12 +363,32 @@ class _AscentRouterState extends State<AscentRouter>
     return pid;
   }
 
-  Future<void> _firstAscent() async {
+  /// Unified gate pipeline — runs on EVERY launch (unless an
+  /// inbound-link / push cold-tap already committed a route).
+  ///
+  /// Rules ("always ask, never remember"):
+  ///   1) Offline → try cached URL; if none, native game.
+  ///   2) Online  → attribution + POST /config.php EVERY time.
+  ///   3) ok:true            → gray, cache URL for offline use next.
+  ///   4) ok:false / any error → native game. No SummitRoute.ascent
+  ///      is persisted, so the very next launch retries the server.
+  ///   5) A single late-attribution retry when the initial gate
+  ///      rejected with a non-transient reason and AppsFlyer says
+  ///      Organic (covers slow first-launch click propagation).
+  Future<void> _runGate() async {
     final bool net = await widget.probe.hasNetwork();
-    debugPrint('[GRAY][ROUTER] firstAscent hasNetwork=$net');
+    debugPrint('[GRAY][ROUTER] runGate hasNetwork=$net');
     if (!net) {
-      debugPrint('[GRAY][ROUTER] no network on first launch → native');
-      await _goNative();
+      // Offline: honor the last gray URL if we have one, so a user
+      // who was gray yesterday still gets the WebView on a plane.
+      final String? cached = await widget.safe.readLink();
+      if (cached != null && cached.isNotEmpty) {
+        debugPrint('[GRAY][ROUTER] offline + cached URL → gray (offline mode)');
+        _toGray(cached);
+      } else {
+        debugPrint('[GRAY][ROUTER] offline + no cache → native');
+        await _goNative();
+      }
       return;
     }
 
@@ -379,19 +403,10 @@ class _AscentRouterState extends State<AscentRouter>
 
     GateVerdict verdict = await _askGate();
 
-    // ── LATE ATTRIBUTION RETRY ─────────────────────────────────
-    // Real-world flakiness on first launch:
-    // - AppsFlyer's browser click can take 10-30s to propagate to
-    //   their attribution DB, especially over cellular/roaming.
-    // - The device may need to hand off DNS mid-request while the
-    //   click is being logged.
-    // If the gate rejected with a non-transient reason AND
-    // attribution came back Organic, we give AppsFlyer one more
-    // chance: wait, ask GCD again, then re-post the gate body.
-    // A single retry only — after that we still commit to native
-    // as the guide requires. Retries happen in debug AND release —
-    // the delay is small (12s max) and only kicks in on cold
-    // installs, so returning users don't feel it.
+    // Late-attribution retry (single shot): AppsFlyer's click
+    // propagation can take 10-30 s over cellular/roaming, so if the
+    // very first gate call rejected AND the SDK reported Organic,
+    // give it one more try after 12 s.
     if (!verdict.approved) {
       final bool transient = verdict.remark != null &&
           (verdict.remark!.contains('endpoint-missing') ||
@@ -413,95 +428,25 @@ class _AscentRouterState extends State<AscentRouter>
     }
 
     if (verdict.approved && verdict.hasContent) {
-      debugPrint('[GRAY][ROUTER] gate approved → gray, persist route=gray');
+      debugPrint('[GRAY][ROUTER] gate approved → gray '
+          '(URL cached for offline fallback)');
+      await widget.safe.writeLink(verdict.contentUrl!);
+      if (verdict.expiresAt != null) {
+        await widget.safe.writeLinkExpiry(verdict.expiresAt!);
+      }
+      // Route persistence kept as a soft signal for other code paths
+      // (push handlers, etc.). Router itself does NOT read it on the
+      // next launch — every start re-asks the server regardless.
       await widget.safe.writeRoute(SummitRoute.gray);
       _toGray(verdict.contentUrl!);
-    } else {
-      // PERSIST DECISION
-      // ----------------
-      // Only a DEFINITIVE server verdict commits the install to
-      // native: an HTTP 200 response, a parseable JSON body and an
-      // explicit `ok:false` from the backend. Everything else —
-      // HTTP 4xx/5xx, timeouts, socket errors, malformed JSON — is
-      // treated as transient: the route stays `pending`, and the
-      // next launch retries the full pipeline.
-      //
-      // This intentionally deviates from a strict reading of the
-      // grey-flow guide ("commit on ok:false") because some backend
-      // configurations return `{"ok":false,"message":"No data"}`
-      // with HTTP 404 for temporarily-missing attribution data,
-      // which we do NOT want to lock the user out over.
-      final bool definitive = verdict.remark != null &&
-          !verdict.remark!.contains('endpoint-missing') &&
-          !verdict.remark!.startsWith('SocketException') &&
-          !verdict.remark!.startsWith('TimeoutException') &&
-          !verdict.remark!.startsWith('http-') &&
-          !verdict.remark!.startsWith('bad-shape');
-      debugPrint('[GRAY][ROUTER] gate rejected remark=${verdict.remark} '
-          'definitive=$definitive');
-      if (definitive) {
-        debugPrint('[GRAY][ROUTER] persist route=ascent (permanent native)');
-        await widget.safe.writeRoute(SummitRoute.ascent);
-      } else {
-        debugPrint('[GRAY][ROUTER] transient — route stays pending, '
-            'next launch will retry');
-      }
-      await _goNative();
-    }
-  }
-
-  Future<void> _resumeGray() async {
-    if (!await widget.probe.hasNetwork()) {
-      _toOffline();
       return;
     }
 
-    // A pending push URL wins over cached + fresh.
-    final String? pending = await widget.safe.takePushUrl();
-    if (pending != null) {
-      _toGray(pending);
-      return;
-    }
-
-    final String? cached = await widget.safe.readLink();
-
-    // If we still have a fresh cached link, use it — no gate call.
-    if (cached != null && !widget.safe.linkExpired()) {
-      _toGray(cached);
-      return;
-    }
-
-    await widget.oracle.ignite();
-    await Future.wait<void>(<Future<void>>[
-      widget.oracle.awaitInstall(seconds: 10),
-      widget.oracle.awaitDeepLink(),
-    ]);
-
-    GateVerdict verdict = await _askGate();
-
-    // Cheap late-attribution retry for returning users too — only
-    // when there is NO cached URL to fall back to, otherwise we'd
-    // needlessly delay the WebView.
-    if (!verdict.approved && cached == null) {
-      final bool looksOrganic =
-          widget.oracle.lastStatus == 'Organic' ||
-              widget.oracle.lastStatus == null ||
-              widget.oracle.lastStatus!.isEmpty;
-      if (looksOrganic) {
-        debugPrint('[GRAY][ROUTER] resume late-attr retry in 8s…');
-        await Future<void>.delayed(const Duration(seconds: 8));
-        await widget.oracle.refreshAttribution();
-        verdict = await _askGate();
-      }
-    }
-
-    if (verdict.approved && verdict.hasContent) {
-      _toGray(verdict.contentUrl!);
-    } else if (cached != null) {
-      _toGray(cached);
-    } else {
-      _toOffline();
-    }
+    // Rejected — ALWAYS go native. No permanent ascent state, so the
+    // next launch re-asks /config.php.
+    debugPrint('[GRAY][ROUTER] gate rejected remark=${verdict.remark} '
+        '→ native (this launch only; will retry next launch)');
+    await _goNative();
   }
 
   Future<GateVerdict> _askGate() async {
@@ -577,23 +522,12 @@ class _AscentRouterState extends State<AscentRouter>
     }
   }
 
-  void _toOffline() {
-    if (_committed || !mounted) return;
-    _committed = true;
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute<void>(
-        builder: (_) => OfflineHatch(
-          retryBuilder: (_) => AscentRouter(
-            safe: widget.safe,
-            probe: widget.probe,
-            oracle: widget.oracle,
-            relay: widget.relay,
-            beacon: widget.beacon,
-          ),
-        ),
-      ),
-    );
-  }
+  // NOTE: `_toOffline()` / `OfflineHatch` was intentionally dropped
+  // from the pipeline. Under the "always ask, never remember" policy
+  // an offline launch either serves a previously-cached gray URL or
+  // falls back to the native game — the user is never blocked on a
+  // Retry screen. The OfflineHatch widget itself is still kept in
+  // the codebase so future flows can bring it back without a rewrite.
 
   // ── UI ──
 
