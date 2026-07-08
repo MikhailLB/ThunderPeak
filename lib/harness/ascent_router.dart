@@ -195,14 +195,32 @@ class _AscentRouterState extends State<AscentRouter>
       await widget.safe.writeRoute(SummitRoute.gray);
       _toGray(verdict.contentUrl!);
     } else {
-      // Per gray-flow guide § "Behavior contract on failure" — a
-      // successful HTTP response with ok:false permanently commits
-      // the install to native mode. A network/DNS failure does NOT
-      // commit; on the next launch we retry.
-      if (verdict.remark != null &&
-          !verdict.remark!.contains('endpoint-missing') &&
-          !verdict.remark!.startsWith('SocketException') &&
-          !verdict.remark!.startsWith('TimeoutException')) {
+      // Per gray-flow guide § "Behavior contract on failure":
+      // ONLY a successful HTTP 200 response with `ok:false` may
+      // permanently commit the install to native. Any transport
+      // failure (DNS, timeout, socket) OR HTTP error (4xx/5xx) is
+      // treated as retriable — otherwise a temporary server outage
+      // on the very first launch would lock the user out of the
+      // gray flow forever with no way to recover short of reinstall.
+      //
+      // `VerdictRelay.rejected(remark)` reports errors as:
+      //   'endpoint-missing'  → config URL not set
+      //   'http-<code>'       → non-2xx response
+      //   '<Exception>: ...'  → transport error
+      // A genuine ok:false lands here with remark = the message
+      // string from the JSON body (or null) and NO `http-`/exception
+      // prefix — that is the only case we permanent-commit.
+      final String? r = verdict.remark;
+      final bool isTransientHttp = r != null && r.startsWith('http-');
+      final bool isTransport = r != null &&
+          (r.contains('endpoint-missing') ||
+              r.startsWith('SocketException') ||
+              r.startsWith('TimeoutException') ||
+              r.startsWith('HandshakeException') ||
+              r.startsWith('HttpException') ||
+              r.startsWith('ClientException') ||
+              r.startsWith('FormatException'));
+      if (!isTransientHttp && !isTransport) {
         await widget.safe.writeRoute(SummitRoute.ascent);
       }
       await _goNative();
