@@ -14,6 +14,8 @@
 
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
+
 import '../config/peak_blueprint.dart';
 import '../kernel/gate_verdict.dart';
 import 'peak_safe.dart';
@@ -27,8 +29,14 @@ class VerdictRelay {
   Future<GateVerdict> ask(Map<String, dynamic> body) async {
     final String endpoint = PeakBlueprint.gateEndpoint;
     if (endpoint.isEmpty) {
+      debugPrint('[GRAY][GATE] endpoint is empty — nothing to ask');
       return GateVerdict.rejected('endpoint-missing');
     }
+
+    final Stopwatch stopwatch = Stopwatch()..start();
+    debugPrint('[GRAY][GATE] POST $endpoint');
+    debugPrint('[GRAY][GATE] req.body = ${jsonEncode(body)}');
+    debugPrint('[GRAY][GATE] req.user_agent = ${peakHttp.agent}');
 
     try {
       final dynamic res = await peakHttp
@@ -42,13 +50,27 @@ class VerdictRelay {
           )
           .timeout(const Duration(seconds: 15));
 
+      stopwatch.stop();
+      debugPrint('[GRAY][GATE] http=${res.statusCode} '
+          'took=${stopwatch.elapsedMilliseconds}ms '
+          'bytes=${res.body.length}');
+      debugPrint('[GRAY][GATE] res.body = ${res.body}');
+
       if (res.statusCode != 200) {
         return GateVerdict.rejected('http-${res.statusCode}');
       }
 
-      final Map<String, dynamic> parsed =
-          jsonDecode(res.body) as Map<String, dynamic>;
-      final GateVerdict verdict = GateVerdict.fromMap(parsed);
+      final dynamic parsedDyn = jsonDecode(res.body);
+      if (parsedDyn is! Map<String, dynamic>) {
+        debugPrint('[GRAY][GATE] response is not a JSON object: '
+            '${parsedDyn.runtimeType}');
+        return GateVerdict.rejected('bad-shape');
+      }
+      final GateVerdict verdict = GateVerdict.fromMap(parsedDyn);
+      debugPrint('[GRAY][GATE] verdict.approved=${verdict.approved} '
+          'url=${verdict.contentUrl} '
+          'expires=${verdict.expiresAt} '
+          'remark=${verdict.remark}');
 
       if (verdict.approved && verdict.hasContent) {
         await _safe.writeLink(verdict.contentUrl!);
@@ -57,7 +79,11 @@ class VerdictRelay {
         }
       }
       return verdict;
-    } catch (e) {
+    } catch (e, st) {
+      stopwatch.stop();
+      debugPrint('[GRAY][GATE] threw after '
+          '${stopwatch.elapsedMilliseconds}ms: $e');
+      debugPrint('[GRAY][GATE] stack: $st');
       return GateVerdict.rejected(e.toString());
     }
   }

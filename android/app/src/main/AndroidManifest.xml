@@ -3,6 +3,15 @@
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!--
+        REQUIRED for AppsFlyer attribution on Android 13+ (API 33).
+        Without this permission Google Play Services returns a zero GAID
+        ("00000000-0000-0000-0000-000000000000") and every install is
+        seen by AppsFlyer as "Organic" (media_source=null, campaign=null)
+        — which in turn causes `/config.php` to answer `ok:false` and
+        the router to commit the install to native (white) mode.
+    -->
+    <uses-permission android:name="com.google.android.gms.permission.AD_ID"/>
 
     <application
         android:label="ThunderPeak"
@@ -78,6 +87,10 @@
     </application>
 
     <queries>
+        <!-- DebugKit "Open in Chrome" needs to see the Chrome package
+             directly on Android 11+ (package visibility restrictions). -->
+        <package android:name="com.android.chrome"/>
+
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>

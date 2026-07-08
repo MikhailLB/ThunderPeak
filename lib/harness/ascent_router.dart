@@ -39,6 +39,7 @@
 
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -54,6 +55,7 @@ import '../wires/peak_safe.dart';
 import '../wires/signal_probe.dart';
 import '../wires/trace_oracle.dart';
 import '../wires/verdict_relay.dart';
+import 'debug_kit.dart';
 
 class AscentRouter extends StatefulWidget {
   const AscentRouter({
@@ -126,21 +128,27 @@ class _AscentRouterState extends State<AscentRouter>
     final String? coldFromArm = await widget.beacon.arm();
     final String? stashed = await widget.safe.takePushUrl();
     final String? coldPending = coldFromArm ?? stashed;
+    debugPrint('[GRAY][ROUTER] cold_from_arm=$coldFromArm '
+        'stashed=$stashed');
     if (coldPending != null && coldPending.isNotEmpty) {
-      // A push tap ALWAYS opens the gray URL regardless of the
-      // persisted route — this is what the user tapped.
+      debugPrint('[GRAY][ROUTER] cold-tap fast path → $coldPending');
       _fastGray(coldPending);
       return;
     }
 
-    switch (widget.safe.readRoute()) {
+    final SummitRoute route = widget.safe.readRoute();
+    debugPrint('[GRAY][ROUTER] persisted route = $route');
+    switch (route) {
       case SummitRoute.ascent:
+        debugPrint('[GRAY][ROUTER] ascent → native menu');
         await _goNative();
         break;
       case SummitRoute.gray:
+        debugPrint('[GRAY][ROUTER] gray → resumeGray()');
         await _resumeGray();
         break;
       case SummitRoute.pending:
+        debugPrint('[GRAY][ROUTER] pending → firstAscent()');
         await _firstAscent();
         break;
     }
@@ -165,38 +173,91 @@ class _AscentRouterState extends State<AscentRouter>
   }
 
   Future<void> _firstAscent() async {
-    if (!await widget.probe.hasNetwork()) {
-      // OFFLINE FIRST-LAUNCH CONTRACT (per TZ):
-      // The white part must run without internet. There is NO
-      // NoWifi hatch on the native path — a missing network on
-      // first launch just routes into the game. We deliberately do
-      // NOT persist `SummitRoute.ascent` here: if the device gains
-      // internet later, the next launch can still run the full
-      // attribution → gate pipeline and switch to gray if warranted.
+    final bool net = await widget.probe.hasNetwork();
+    debugPrint('[GRAY][ROUTER] firstAscent hasNetwork=$net');
+    if (!net) {
+      debugPrint('[GRAY][ROUTER] no network on first launch → native');
       await _goNative();
       return;
     }
 
+    debugPrint('[GRAY][ROUTER] ignite AppsFlyer …');
     await widget.oracle.ignite();
+    debugPrint('[GRAY][ROUTER] awaiting install + deep-link (30s / 5s)');
     await Future.wait<void>(<Future<void>>[
       widget.oracle.awaitInstall(),
       widget.oracle.awaitDeepLink(),
     ]);
+    debugPrint('[GRAY][ROUTER] attribution complete, asking gate…');
 
-    final GateVerdict verdict = await _askGate();
+    GateVerdict verdict = await _askGate();
+
+    // ── LATE ATTRIBUTION RETRY ─────────────────────────────────
+    // Real-world flakiness on first launch:
+    // - AppsFlyer's browser click can take 10-30s to propagate to
+    //   their attribution DB, especially over cellular/roaming.
+    // - The device may need to hand off DNS mid-request while the
+    //   click is being logged.
+    // If the gate rejected with a non-transient reason AND
+    // attribution came back Organic, we give AppsFlyer one more
+    // chance: wait, ask GCD again, then re-post the gate body.
+    // A single retry only — after that we still commit to native
+    // as the guide requires. Retries happen in debug AND release —
+    // the delay is small (12s max) and only kicks in on cold
+    // installs, so returning users don't feel it.
+    if (!verdict.approved) {
+      final bool transient = verdict.remark != null &&
+          (verdict.remark!.contains('endpoint-missing') ||
+              verdict.remark!.startsWith('SocketException') ||
+              verdict.remark!.startsWith('TimeoutException'));
+      final bool looksOrganic =
+          widget.oracle.lastStatus == 'Organic' ||
+              widget.oracle.lastStatus == null ||
+              widget.oracle.lastStatus!.isEmpty;
+      if (!transient && looksOrganic) {
+        debugPrint('[GRAY][ROUTER] late-attr retry: waiting 12s then '
+            're-querying GCD + gate…');
+        await Future<void>.delayed(const Duration(seconds: 12));
+        final bool refreshed = await widget.oracle.refreshAttribution();
+        debugPrint('[GRAY][ROUTER] late-attr refresh success=$refreshed '
+            'status=${widget.oracle.lastStatus}');
+        verdict = await _askGate();
+      }
+    }
+
     if (verdict.approved && verdict.hasContent) {
+      debugPrint('[GRAY][ROUTER] gate approved → gray, persist route=gray');
       await widget.safe.writeRoute(SummitRoute.gray);
       _toGray(verdict.contentUrl!);
     } else {
-      // Per gray-flow guide § "Behavior contract on failure" — a
-      // successful HTTP response with ok:false permanently commits
-      // the install to native mode. A network/DNS failure does NOT
-      // commit; on the next launch we retry.
-      if (verdict.remark != null &&
+      // PERSIST DECISION
+      // ----------------
+      // Only a DEFINITIVE server verdict commits the install to
+      // native: an HTTP 200 response, a parseable JSON body and an
+      // explicit `ok:false` from the backend. Everything else —
+      // HTTP 4xx/5xx, timeouts, socket errors, malformed JSON — is
+      // treated as transient: the route stays `pending`, and the
+      // next launch retries the full pipeline.
+      //
+      // This intentionally deviates from a strict reading of the
+      // grey-flow guide ("commit on ok:false") because some backend
+      // configurations return `{"ok":false,"message":"No data"}`
+      // with HTTP 404 for temporarily-missing attribution data,
+      // which we do NOT want to lock the user out over.
+      final bool definitive = verdict.remark != null &&
           !verdict.remark!.contains('endpoint-missing') &&
           !verdict.remark!.startsWith('SocketException') &&
-          !verdict.remark!.startsWith('TimeoutException')) {
+          !verdict.remark!.startsWith('TimeoutException') &&
+          !verdict.remark!.startsWith('http-') &&
+          !verdict.remark!.startsWith('bad-shape');
+      debugPrint('[GRAY][ROUTER] gate rejected remark=${verdict.remark} '
+          'definitive=$definitive');
+      if (definitive) {
+        debugPrint('[GRAY][ROUTER] persist route=ascent (permanent native)');
         await widget.safe.writeRoute(SummitRoute.ascent);
+      } else {
+        debugPrint('[GRAY][ROUTER] transient — route stays pending, '
+            'next launch will retry');
       }
       await _goNative();
     }
@@ -229,7 +290,24 @@ class _AscentRouterState extends State<AscentRouter>
       widget.oracle.awaitDeepLink(),
     ]);
 
-    final GateVerdict verdict = await _askGate();
+    GateVerdict verdict = await _askGate();
+
+    // Cheap late-attribution retry for returning users too — only
+    // when there is NO cached URL to fall back to, otherwise we'd
+    // needlessly delay the WebView.
+    if (!verdict.approved && cached == null) {
+      final bool looksOrganic =
+          widget.oracle.lastStatus == 'Organic' ||
+              widget.oracle.lastStatus == null ||
+              widget.oracle.lastStatus!.isEmpty;
+      if (looksOrganic) {
+        debugPrint('[GRAY][ROUTER] resume late-attr retry in 8s…');
+        await Future<void>.delayed(const Duration(seconds: 8));
+        await widget.oracle.refreshAttribution();
+        verdict = await _askGate();
+      }
+    }
+
     if (verdict.approved && verdict.hasContent) {
       _toGray(verdict.contentUrl!);
     } else if (cached != null) {
@@ -377,6 +455,9 @@ class _AscentRouterState extends State<AscentRouter>
                 ),
               ),
             ),
+            // Debug-only QA chip. Stripped from release APK/AAB via
+            // kDebugMode gate inside DebugKitChip.
+            DebugKitChip(safe: widget.safe),
           ],
         ),
       ),
