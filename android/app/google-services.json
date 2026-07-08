@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "718133543018",
+    "project_id": "thunderpeak-bb4bb",
+    "storage_bucket": "thunderpeak-bb4bb.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:718133543018:android:a695dea8127977c34f4a13",
+        "android_client_info": {
+          "package_name": "com.cascplunge.cascadeplunge"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDY90txg7FuMb_B_dPRvDUDr7APLz0CY9k"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

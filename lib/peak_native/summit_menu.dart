@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
 
-import 'game_screen.dart';
-import 'webview_screen.dart';
+import '../config/peak_blueprint.dart';
+import 'arena_screen.dart';
+import 'legal_view.dart';
 
-class MainMenu extends StatelessWidget {
-  const MainMenu({super.key});
+class SummitMenu extends StatelessWidget {
+  const SummitMenu({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -59,7 +60,7 @@ class MainMenu extends StatelessWidget {
                           onTap: () {
                             Navigator.of(context).push(
                               MaterialPageRoute(
-                                builder: (_) => const GameScreen(),
+                                builder: (_) => const ArenaScreen(),
                               ),
                             );
                           },
@@ -71,10 +72,9 @@ class MainMenu extends StatelessWidget {
                           onTap: () {
                             Navigator.of(context).push(
                               MaterialPageRoute(
-                                builder: (_) => const WebViewScreen(
+                                builder: (_) => const LegalView(
                                   title: 'Privacy Policy',
-                                  url:
-                                      'https://thunderrpeak.com/privacy-policy.html',
+                                  url: PeakBlueprint.privacyUrl,
                                 ),
                               ),
                             );
@@ -87,9 +87,9 @@ class MainMenu extends StatelessWidget {
                           onTap: () {
                             Navigator.of(context).push(
                               MaterialPageRoute(
-                                builder: (_) => const WebViewScreen(
+                                builder: (_) => const LegalView(
                                   title: 'Support',
-                                  url: 'https://thunderrpeak.com/support.html',
+                                  url: PeakBlueprint.helpUrl,
                                 ),
                               ),
                             );

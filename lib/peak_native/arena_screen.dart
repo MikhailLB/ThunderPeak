@@ -70,14 +70,14 @@ class Collectible {
   double phase = 0.0;
 }
 
-class GameScreen extends StatefulWidget {
-  const GameScreen({super.key});
+class ArenaScreen extends StatefulWidget {
+  const ArenaScreen({super.key});
 
   @override
-  State<GameScreen> createState() => _GameScreenState();
+  State<ArenaScreen> createState() => _ArenaScreenState();
 }
 
-class _GameScreenState extends State<GameScreen>
+class _ArenaScreenState extends State<ArenaScreen>
     with TickerProviderStateMixin {
   late final Ticker _ticker;
   Duration _lastTick = Duration.zero;

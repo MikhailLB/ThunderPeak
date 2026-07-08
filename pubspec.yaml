@@ -1,7 +1,19 @@
+# ThunderPeak — Flutter/Android app
+#
+# A charged-lightning arcade where Zeus defends the summit. Ships
+# with a gray-flow shell that routes attribution-verified installs
+# into a remote WebView experience while every other install plays
+# the native game.
+#
+# Versions here are intentionally staggered against every previous
+# project — see `.cursor/rules/android_gray_guide.md` §"Library
+# Versions Reference". Do not copy a `^x.y.z` triplet from another
+# project verbatim.
+
 name: thunderpeak
-description: "Thunder Peak - Zeus defends the sacred mountain."
+description: "Zeus defends the sacred mountain from mythical foes."
 publish_to: 'none'
-version: 1.0.1+1
+version: 1.0.1+3
 
 environment:
   sdk: ^3.12.2
@@ -9,8 +21,29 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+
   cupertino_icons: ^1.0.8
-  webview_flutter: ^4.10.0
+
+  # ── Gray-flow stack ──
+  # webview_flutter — one minor behind the template on purpose.
+  webview_flutter: ^4.13.1
+  webview_flutter_android: ^4.11.0
+  # Prefs / secure storage.
+  shared_preferences: ^2.5.3
+  flutter_secure_storage: ^10.1.0
+  # Connectivity + HTTP.
+  connectivity_plus: ^7.0.0
+  http: ^1.5.0
+  device_info_plus: ^11.4.0
+  url_launcher: ^6.3.2
+  # AppsFlyer + Firebase — locked to versions that don't drop 16 KB
+  # page-size alignment (see pitfalls §11).
+  appsflyer_sdk: ^6.17.0
+  firebase_core: ^4.10.0
+  firebase_messaging: ^16.3.0
+  firebase_app_check: ^0.4.4
+  # Local notification renderer for foreground push.
+  flutter_local_notifications: ^22.0.0
 
 dev_dependencies:
   flutter_test:
@@ -18,6 +51,10 @@ dev_dependencies:
   flutter_lints: ^6.0.0
   flutter_launcher_icons: ^0.14.4
 
+# Launcher icon config — the source PNG is the padded variant so
+# the artwork fits within the adaptive safe zone AND fills the
+# rest of the canvas via its own blurred halo. See the section on
+# icon padding in the initial ThunderPeak README.
 flutter_launcher_icons:
   android: "launcher_icon"
   ios: false
@@ -32,6 +69,12 @@ flutter:
   uses-material-design: true
 
   assets:
+    # Gray-flow shell backgrounds (loading / notif / nowifi).
+    - assets/olympus_shell_pack/
+    # Launcher icon source PNGs.
+    - assets/Icon.png
+    - assets/Icon_padded.png
+    # Native game artwork.
     - assets/Background_OlympusTemple.webp
     - assets/Background_StormSky.webp
     - assets/Background_ThunderPeak.webp
@@ -44,11 +87,8 @@ flutter:
     - assets/Enemy_Minotaur.webp
     - assets/Game_Name.webp
     - assets/Hero.webp
-    - assets/Horizontal_Loading.webp
-    - assets/Icon.png
     - assets/Obstacle_FallingColumn.webp
     - assets/Obstacle_FireTrap.webp
     - assets/Obstacle_ThunderCloud.webp
     - assets/Powerup_DivineShield.webp
     - assets/Powerup_StormRage.webp
-    - assets/Vertical_Loading.webp
