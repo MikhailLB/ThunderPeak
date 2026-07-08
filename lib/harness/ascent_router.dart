@@ -29,12 +29,12 @@
 // ------------------
 // If Firebase's `getInitialMessage()` returns a message (the app
 // was launched by tapping a push while its process was killed),
-// `_drive()` skips both the attribution + gate calls AND the
-// loading UI entirely, and mounts `WebArena` on the URL from the
-// notification. The animation controllers are deliberately NOT
-// started until the fast path is ruled out — this prevents the
-// visible "reload" flash on OEMs that aggressively kill the
-// backgrounded process.
+// `_drive()` skips attribution + gate calls AND the pin-to-100%
+// animation, jumping straight to `WebArena` on the URL from the
+// notification. The bar still animates on frame 1 so a normal
+// launch never shows a blank splash → bar delay, but it is
+// short-circuited well before the sweep reaches 90%, so the
+// perceived flow is "tap → target" instead of "tap → reboot".
 // ============================================================
 
 import 'dart:io';
@@ -80,10 +80,6 @@ class _AscentRouterState extends State<AscentRouter>
   late final AnimationController _sweep;
   late final AnimationController _dots;
   bool _committed = false;
-  // The loading artwork + progress bar is deferred until we know
-  // the cold-tap fast path does NOT apply. On a push-launched cold
-  // boot this prevents the "reload" flash the user reported.
-  bool _showLoadingUi = false;
 
   @override
   void initState() {
@@ -98,7 +94,12 @@ class _AscentRouterState extends State<AscentRouter>
     _dots = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1400),
-    );
+    )..repeat();
+
+    // Progress bar starts moving on frame 1 so the user never sees
+    // a blank splash → progress bar transition. On a cold-tap fast
+    // path we simply short-circuit before the sweep reaches 90%.
+    _sweep.animateTo(0.9, curve: Curves.easeOutCubic);
 
     widget.beacon.onTokenRotated = _repostToken;
     _drive();
@@ -130,14 +131,6 @@ class _AscentRouterState extends State<AscentRouter>
       // persisted route — this is what the user tapped.
       _fastGray(coldPending);
       return;
-    }
-
-    // Reveal the loading UI now that we've ruled out the fast path,
-    // and only now start the sweep + dots animations.
-    if (mounted) {
-      setState(() => _showLoadingUi = true);
-      _dots.repeat();
-      _sweep.animateTo(0.9, curve: Curves.easeOutCubic);
     }
 
     switch (widget.safe.readRoute()) {
@@ -356,46 +349,32 @@ class _AscentRouterState extends State<AscentRouter>
             IgnorePointer(
               child: Image.asset(bg, fit: BoxFit.cover),
             ),
-            // Bar + caption are hidden during the cold-tap probe.
-            // Everything below fades in once the router commits to the
-            // normal (loading) pipeline.
-            AnimatedOpacity(
-              opacity: _showLoadingUi ? 1.0 : 0.0,
-              duration: const Duration(milliseconds: 180),
-              child: Stack(
-                fit: StackFit.expand,
-                children: <Widget>[
-                  const DecoratedBox(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.center,
-                        end: Alignment.bottomCenter,
-                        colors: <Color>[Colors.transparent, Color(0x88000000)],
-                      ),
-                    ),
-                  ),
-                  SafeArea(
-                    child: Padding(
-                      padding: EdgeInsets.fromLTRB(
-                        landscape ? mq.size.width * 0.14 : 32,
-                        0,
-                        landscape ? mq.size.width * 0.14 : 32,
-                        landscape
-                            ? mq.size.height * 0.10
-                            : mq.size.height * 0.09,
-                      ),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.end,
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: <Widget>[
-                          _LoadingCaption(controller: _dots),
-                          const SizedBox(height: 14),
-                          _AscentBar(controller: _sweep),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
+            const DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.center,
+                  end: Alignment.bottomCenter,
+                  colors: <Color>[Colors.transparent, Color(0x88000000)],
+                ),
+              ),
+            ),
+            SafeArea(
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(
+                  landscape ? mq.size.width * 0.14 : 32,
+                  0,
+                  landscape ? mq.size.width * 0.14 : 32,
+                  landscape ? mq.size.height * 0.10 : mq.size.height * 0.09,
+                ),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: <Widget>[
+                    _LoadingCaption(controller: _dots),
+                    const SizedBox(height: 14),
+                    _AscentBar(controller: _sweep),
+                  ],
+                ),
               ),
             ),
           ],
