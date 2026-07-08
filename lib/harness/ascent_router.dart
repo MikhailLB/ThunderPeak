@@ -457,7 +457,11 @@ class _AscentRouterState extends State<AscentRouter>
             ),
             // Debug-only QA chip. Stripped from release APK/AAB via
             // kDebugMode gate inside DebugKitChip.
-            DebugKitChip(safe: widget.safe),
+            DebugKitChip(
+              safe: widget.safe,
+              beacon: widget.beacon,
+              probe: widget.probe,
+            ),
           ],
         ),
       ),

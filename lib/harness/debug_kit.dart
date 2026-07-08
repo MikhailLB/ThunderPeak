@@ -21,13 +21,21 @@
 //      file, SDK returns Non-organic, gate returns ok:true, gray.
 // ============================================================
 
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../config/peak_blueprint.dart';
+import '../gray_veil/web_arena.dart';
+import '../kernel/gate_verdict.dart';
 import '../kernel/summit_route.dart';
+import '../wires/bolt_beacon.dart';
 import '../wires/peak_safe.dart';
+import '../wires/signal_probe.dart';
+import '../wires/ua_forge.dart';
 
 /// A OneLink hard-coded for QA use. Change here when the tester wants
 /// to exercise a different campaign — this string never leaks into
@@ -42,7 +50,7 @@ const String kDebugOneLink =
     '&af_sub4=testextra5&af_sub5=testextra6'
     '&is_retargeting=true'
     '&deep_link_value=deep_link_test&deep_link_sub1=deep_test_sub1'
-    '&advertising_id=2d6663b8-efe3-497f-908c-11d06e7b0c7b';
+    '&advertising_id=7d0d0acb-2603-4f89-8006-ac622ca4a505';
 
 class DebugKit {
   DebugKit._();
@@ -70,14 +78,136 @@ class DebugKit {
       await _dev.invokeMethod<bool>('clear_app_data');
     } catch (_) {}
   }
+
+  /// Parses a OneLink URL, synthesizes a Non-organic attribution body
+  /// and asks `/config.php` for a content URL — bypassing AppsFlyer's
+  /// server-side click tracking entirely.
+  ///
+  /// Useful when the OneLink itself is (temporarily) broken on
+  /// AppsFlyer's side, or when there is no way to record a real
+  /// browser click in the current test environment. The config
+  /// server validates against the shape of the body, not against a
+  /// real click on AppsFlyer, so this yields a real ok:true response
+  /// with a real content URL when the campaign parameters look
+  /// plausible.
+  ///
+  /// Persists route=gray + link + expiry on success. Returns the
+  /// content URL, or null on any failure.
+  static Future<String?> simulateOneLinkClick(
+    String oneLinkUrl,
+    PeakSafe safe, {
+    String? pushToken,
+  }) async {
+    if (!kDebugMode) return null;
+
+    final Uri parsed = Uri.parse(oneLinkUrl);
+    final Map<String, String> q = parsed.queryParameters;
+
+    // Translate the OneLink params to the AppsFlyer-attribution keys
+    // that `/config.php` expects. `pid` → media_source, `c` →
+    // campaign; everything with an `af_` prefix passes through
+    // unchanged. Empty inputs are dropped so the body only carries
+    // the fields the campaign actually set.
+    final Map<String, dynamic> body = <String, dynamic>{
+      'af_status': 'Non-organic',
+      'match_type': 'id_matching',
+      'is_first_launch': true,
+      if (q['pid'] != null) 'media_source': _decodePidToMediaSource(q['pid']!),
+      if (q['c'] != null) 'campaign': Uri.decodeComponent(q['c']!),
+      if (q['adset'] != null) 'adset': q['adset'],
+      if (q['af_adset'] != null) 'af_adset': q['af_adset'],
+      if (q['af_c_id'] != null) 'af_c_id': q['af_c_id'],
+      if (q['siteid'] != null) 'siteid': q['siteid'],
+      if (q['agency'] != null) 'agency': Uri.decodeComponent(q['agency']!),
+      if (q['af_sub1'] != null) 'af_sub1': q['af_sub1'],
+      if (q['af_sub2'] != null) 'af_sub2': q['af_sub2'],
+      if (q['af_sub3'] != null) 'af_sub3': q['af_sub3'],
+      if (q['af_sub4'] != null) 'af_sub4': q['af_sub4'],
+      if (q['af_sub5'] != null) 'af_sub5': q['af_sub5'],
+      if (q['deep_link_value'] != null)
+        'deep_link_value': q['deep_link_value'],
+      if (q['deep_link_sub1'] != null)
+        'deep_link_sub1': q['deep_link_sub1'],
+      if (q['is_retargeting'] != null)
+        'is_retargeting': q['is_retargeting'] == 'true',
+      if (q['advertising_id'] != null)
+        'advertising_id': q['advertising_id'],
+      // Match the shortlink (last path segment) so the server can
+      // route the campaign through its usual pipeline.
+      if (parsed.pathSegments.length >= 2)
+        'shortlink': parsed.pathSegments.last,
+      'af_id': 'dbg-${DateTime.now().millisecondsSinceEpoch}',
+      'bundle_id': PeakBlueprint.packageTag,
+      'os': Platform.isAndroid ? 'Android' : 'iOS',
+      'store_id': PeakBlueprint.marketTag,
+      'locale': Platform.localeName.replaceAll('-', '_'),
+      if (pushToken != null && pushToken.isNotEmpty)
+        'push_token': pushToken,
+      if (PeakBlueprint.messagingProject.isNotEmpty)
+        'firebase_project_id': PeakBlueprint.messagingProject,
+    };
+
+    debugPrint('[GRAY][DBG] simulateOneLinkClick body = ${jsonEncode(body)}');
+
+    try {
+      final dynamic res = await peakHttp
+          .post(
+            Uri.parse(PeakBlueprint.gateEndpoint),
+            headers: const <String, String>{
+              'Content-Type': 'application/json',
+              'Accept': 'application/json',
+            },
+            body: jsonEncode(body),
+          )
+          .timeout(const Duration(seconds: 15));
+
+      debugPrint('[GRAY][DBG] simulateOneLinkClick http=${res.statusCode} '
+          'body=${res.body}');
+
+      if (res.statusCode != 200) return null;
+
+      final GateVerdict verdict = GateVerdict.fromMap(
+        jsonDecode(res.body) as Map<String, dynamic>,
+      );
+      if (!verdict.approved || !verdict.hasContent) return null;
+
+      await safe.writeLink(verdict.contentUrl!);
+      if (verdict.expiresAt != null) {
+        await safe.writeLinkExpiry(verdict.expiresAt!);
+      }
+      await safe.writeRoute(SummitRoute.gray);
+      return verdict.contentUrl;
+    } catch (e) {
+      debugPrint('[GRAY][DBG] simulateOneLinkClick error: $e');
+      return null;
+    }
+  }
+
+  /// `pid=Test Source` (URL-encoded) is what our successful real-click
+  /// test received back from AppsFlyer server-side as
+  /// `media_source: "my_media_source"`. Config.php happens to accept
+  /// EITHER value, but keeping the same transform means the response
+  /// looks identical to a real attribution.
+  static String _decodePidToMediaSource(String pid) {
+    final String decoded = Uri.decodeComponent(pid);
+    if (decoded.toLowerCase() == 'test source') return 'my_media_source';
+    return decoded;
+  }
 }
 
 /// Tiny corner chip that reveals the debug bottom sheet. Add to any
 /// screen you want to expose QA controls on — but only in debug mode.
 class DebugKitChip extends StatelessWidget {
-  const DebugKitChip({super.key, required this.safe});
+  const DebugKitChip({
+    super.key,
+    required this.safe,
+    required this.beacon,
+    required this.probe,
+  });
 
   final PeakSafe safe;
+  final BoltBeacon beacon;
+  final SignalProbe probe;
 
   @override
   Widget build(BuildContext context) {
@@ -126,15 +256,25 @@ class DebugKitChip extends StatelessWidget {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      builder: (BuildContext ctx) => _DebugSheet(safe: safe),
+      builder: (BuildContext ctx) => _DebugSheet(
+        safe: safe,
+        beacon: beacon,
+        probe: probe,
+      ),
     );
   }
 }
 
 class _DebugSheet extends StatefulWidget {
-  const _DebugSheet({required this.safe});
+  const _DebugSheet({
+    required this.safe,
+    required this.beacon,
+    required this.probe,
+  });
 
   final PeakSafe safe;
+  final BoltBeacon beacon;
+  final SignalProbe probe;
 
   @override
   State<_DebugSheet> createState() => _DebugSheetState();
@@ -224,6 +364,17 @@ class _DebugSheetState extends State<_DebugSheet> {
                       : _shortLink(PeakBlueprint.gateEndpoint)),
             ],
             const SizedBox(height: 20),
+            _btn(
+              icon: Icons.bolt_rounded,
+              label: 'Simulate OneLink click → gray (bypass AppsFlyer)',
+              subtitle:
+                  'Parses the QA OneLink params, posts a synthesized '
+                  'Non-organic body straight to /config.php and opens the '
+                  'returned URL in the WebView. Use when the OneLink is '
+                  'temporarily broken on AppsFlyer\'s side.',
+              onTap: () => _simulateAndOpen(context),
+            ),
+            const SizedBox(height: 12),
             _btn(
               icon: Icons.rocket_launch_rounded,
               label: 'Prepare test click (Chrome → wipe → relaunch)',
@@ -343,6 +494,58 @@ class _DebugSheetState extends State<_DebugSheet> {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _simulateAndOpen(BuildContext context) async {
+    final NavigatorState rootNav = Navigator.of(context, rootNavigator: true);
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext c) => const AlertDialog(
+        backgroundColor: Color(0xFF11213A),
+        content: Row(
+          children: <Widget>[
+            CircularProgressIndicator(),
+            SizedBox(width: 18),
+            Expanded(
+              child: Text(
+                'Asking /config.php with a synthesized Non-organic body…',
+                style: TextStyle(color: Colors.white),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    final String? gray = await DebugKit.simulateOneLinkClick(
+      kDebugOneLink,
+      widget.safe,
+      pushToken: widget.beacon.token,
+    );
+
+    if (!context.mounted) return;
+    // Dismiss loader dialog.
+    Navigator.of(context, rootNavigator: true).pop();
+
+    if (gray == null) {
+      _toast(context, 'Failed — check console for [GRAY][DBG] logs');
+      return;
+    }
+
+    // Pop the debug bottom sheet, then replace the loading screen with
+    // WebArena directly. This avoids a "restart the app" step for QA.
+    Navigator.of(context).pop();
+    rootNav.pushReplacement(
+      MaterialPageRoute<void>(
+        builder: (_) => WebArena(
+          link: gray,
+          safe: widget.safe,
+          beacon: widget.beacon,
+          probe: widget.probe,
         ),
       ),
     );
