@@ -8,6 +8,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 
 /**
@@ -34,8 +35,49 @@ class MainActivity : FlutterActivity() {
     // it isolated from attachChannel means release APKs can strip the
     // Dart-side caller without touching any production code path.
     private val devChannel = "peak/dev"
+    // Inbound-link bridge — exposes the URI that launched the activity
+    // (or was delivered via onNewIntent) to the Dart router. The
+    // router uses this to detect a OneLink tap and take the gray path
+    // WITHOUT waiting for AppsFlyer's SDK to report a click.
+    private val linkMethodChannel = "peak/route"
+    private val linkEventChannel = "peak/route/events"
     private val attachRequestCode = 0x50C7
     private var pendingBridge: MethodChannel.Result? = null
+    // The URI from Intent.ACTION_VIEW that started (or re-started) us.
+    // Null on a normal LAUNCHER intent. Consumed by the Dart side.
+    private var pendingLink: String? = null
+    private var linkSink: EventChannel.EventSink? = null
+
+    override fun onCreate(savedInstanceState: android.os.Bundle?) {
+        // Capture the launching URI as early as possible — the
+        // FlutterEngine may take a beat to attach, so we cache it
+        // and hand it over on the first `getInitialLink()` call.
+        pendingLink = extractLink(intent)
+        super.onCreate(savedInstanceState)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        val link = extractLink(intent) ?: return
+        // If the Dart side is already listening, push through the
+        // stream; otherwise stash for the next getInitialLink() call.
+        val sink = linkSink
+        if (sink != null) {
+            sink.success(link)
+        } else {
+            pendingLink = link
+        }
+    }
+
+    private fun extractLink(intent: Intent?): String? {
+        if (intent == null) return null
+        if (intent.action != Intent.ACTION_VIEW) return null
+        val uri = intent.data ?: return null
+        val s = uri.toString()
+        if (s.isBlank()) return null
+        return s
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -50,6 +92,42 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+
+        // Inbound-link method channel — one-shot fetch of the URI
+        // that launched the activity. Returns null when there was no
+        // ACTION_VIEW / when the URI was already consumed.
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, linkMethodChannel)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "getInitialLink" -> {
+                        val link = pendingLink
+                        pendingLink = null
+                        result.success(link)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+
+        // Inbound-link event stream — every subsequent ACTION_VIEW
+        // (delivered via onNewIntent when the activity is already in
+        // singleTask) is pushed here.
+        EventChannel(flutterEngine.dartExecutor.binaryMessenger, linkEventChannel)
+            .setStreamHandler(object : EventChannel.StreamHandler {
+                override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+                    linkSink = events
+                    // If a URI arrived before the Dart listener was up,
+                    // deliver it immediately — but do NOT clear it here,
+                    // because getInitialLink() may still need it.
+                    val stashed = pendingLink
+                    if (stashed != null && events != null) {
+                        events.success(stashed)
+                    }
+                }
+
+                override fun onCancel(arguments: Any?) {
+                    linkSink = null
+                }
+            })
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, devChannel)
             .setMethodCallHandler { call, result ->

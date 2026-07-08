@@ -27,6 +27,7 @@ import 'package:flutter/services.dart';
 
 import 'harness/root_shell.dart';
 import 'wires/bolt_beacon.dart';
+import 'wires/link_intake.dart';
 import 'wires/peak_safe.dart';
 import 'wires/signal_probe.dart';
 import 'wires/trace_oracle.dart';
@@ -64,6 +65,10 @@ Future<void> main() async {
   final TraceOracle oracle = TraceOracle();
   final VerdictRelay relay = VerdictRelay(safe);
   final BoltBeacon beacon = BoltBeacon(safe);
+
+  // Start listening for onNewIntent URIs so a warm OneLink tap can
+  // route to the gray part while the app is already alive.
+  LinkIntake.instance.arm();
 
   runApp(RootShell(
     safe: safe,

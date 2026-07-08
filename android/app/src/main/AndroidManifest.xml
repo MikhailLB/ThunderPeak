@@ -54,18 +54,43 @@
 
             <!--
                 AppsFlyer OneLink deep-link intent filter.
-                The host below is a project-unique subdomain — replace
-                with the value issued by the AppsFlyer dashboard for
-                ThunderPeak (App Settings → OneLink → Subdomain) once
-                the manager provisions it.
+
+                `autoVerify` is intentionally OFF. AppsFlyer does NOT
+                host the required `/.well-known/assetlinks.json` on
+                `thunderpeak.onelink.me` (verified: HTTP 404
+                domain_not_found), so Android's App Links verification
+                fails with state 1024 and — on API 31+ — our app is
+                SILENTLY EXCLUDED from the intent chooser. With
+                autoVerify off, our app becomes a regular chooser
+                option again and can catch the OneLink URI itself.
+                The router treats an inbound onelink.me URI with
+                attribution query params as a Non-organic proof and
+                skips AppsFlyer + gate-attribution entirely, POSTing
+                a synthesized body straight to /config.php.
             -->
-            <intent-filter android:autoVerify="true">
+            <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data
                     android:scheme="https"
                     android:host="thunderpeak.onelink.me" />
+            </intent-filter>
+
+            <!--
+                Custom-scheme deep-link. Works regardless of Android
+                App Links verification and regardless of AppsFlyer's
+                domain configuration. Configure the OneLink template
+                on the AppsFlyer dashboard to redirect to
+                `thunderpeak://open?...<all-onelink-params>...` via
+                the `android_url_scheme` / `af_dp` param, and every
+                click will hand the attribution over to our app.
+            -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="thunderpeak" />
             </intent-filter>
         </activity>
 
