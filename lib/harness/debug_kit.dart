@@ -79,6 +79,26 @@ class DebugKit {
     } catch (_) {}
   }
 
+  /// Opens the OS "Open by default" screen for the ThunderPeak
+  /// package. Available in BOTH debug and release builds — this is
+  /// the fastest way to fix the "tap OneLink → Chrome instead of
+  /// ThunderPeak" symptom on devices where AppsFlyer's Android
+  /// App Links verification is failing (assetlinks.json 404).
+  ///
+  /// After the user toggles ON `thunderpeak.onelink.me` on that
+  /// screen, every tap on a OneLink URL is delivered directly to
+  /// MainActivity's ACTION_VIEW intent-filter and the router's
+  /// inbound-link bypass fires → gray part launches, no chooser,
+  /// no Chrome round-trip, no dependency on AppsFlyer's server.
+  static Future<bool> openLinkDefaults() async {
+    try {
+      final bool? ok = await _dev.invokeMethod<bool>('open_link_defaults');
+      return ok ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// Parses a OneLink URL, synthesizes a Non-organic attribution body
   /// and asks `/config.php` for a content URL — bypassing AppsFlyer's
   /// server-side click tracking entirely.
@@ -364,6 +384,27 @@ class _DebugSheetState extends State<_DebugSheet> {
                       : _shortLink(PeakBlueprint.gateEndpoint)),
             ],
             const SizedBox(height: 20),
+            _btn(
+              icon: Icons.settings_ethernet_rounded,
+              label: 'Открыть системный экран "Open by default" 🔗',
+              subtitle:
+                  'Единственный способ заставить OS отдавать тапы по '
+                  'OneLink нам, а не Chrome. На открывшемся экране '
+                  'включи "Open supported links" и добавь '
+                  '"thunderpeak.onelink.me". После этого тап по любой '
+                  'OneLink-ссылке будет напрямую открывать серую часть.',
+              onTap: () async {
+                final bool ok = await DebugKit.openLinkDefaults();
+                if (!context.mounted) return;
+                _toast(
+                  context,
+                  ok
+                      ? 'Открываю Settings — включи "Open supported links"'
+                      : 'Failed to open Settings',
+                );
+              },
+            ),
+            const SizedBox(height: 12),
             _btn(
               icon: Icons.bolt_rounded,
               label: 'Simulate OneLink click → gray (bypass AppsFlyer)',

@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.provider.Settings
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
@@ -149,9 +150,55 @@ class MainActivity : FlutterActivity() {
                         val ok = am.clearApplicationUserData()
                         result.success(ok)
                     }
+                    "open_link_defaults" -> {
+                        // Opens the system "Open by default" screen for our
+                        // package. On Android 12+ (API 31+) this is where
+                        // the user has to explicitly allow us to handle
+                        // `thunderpeak.onelink.me` links directly, because
+                        // Android App Links verification is failing on
+                        // AppsFlyer's side (assetlinks.json returns 404).
+                        //
+                        // Two APIs, tried in order — the newer per-app
+                        // screen is only present on some Android 12+
+                        // OEMs; a generic App Details fallback works
+                        // everywhere else.
+                        result.success(openOpenByDefaultSettings())
+                    }
                     else -> result.notImplemented()
                 }
             }
+    }
+
+    /**
+     * Opens the OS screen where the user can add
+     * `thunderpeak.onelink.me` to our app's "supported links". Once
+     * that toggle is set, every tap on the OneLink URL is delivered
+     * to us directly and the router's inbound-link bypass fires.
+     */
+    private fun openOpenByDefaultSettings(): Boolean {
+        val uri = Uri.parse("package:$packageName")
+        // API 31+ — direct "Open by default" screen.
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+            val direct = Intent(
+                Settings.ACTION_APP_OPEN_BY_DEFAULT_SETTINGS,
+                uri,
+            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            if (direct.resolveActivity(packageManager) != null) {
+                startActivity(direct)
+                return true
+            }
+        }
+        // Fallback — the app details page. The "Open by default"
+        // entry sits inside it on all modern Android versions.
+        val details = Intent(
+            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+            uri,
+        ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        if (details.resolveActivity(packageManager) != null) {
+            startActivity(details)
+            return true
+        }
+        return false
     }
 
     /**

@@ -68,13 +68,38 @@
                 skips AppsFlyer + gate-attribution entirely, POSTing
                 a synthesized body straight to /config.php.
             -->
-            <intent-filter>
+            <!--
+                Priority 999 tilts Android's intent resolver toward us
+                over Chrome (default priority 0) when the user has NOT
+                explicitly opted us out. On API 31+ the browser role
+                still trumps priority for un-verified http URLs, but
+                priority does win on older Android versions and on
+                devices where Chrome is not the sole default browser.
+                Users on API 31+ get to us via the "Open by default"
+                settings shortcut exposed in the app (peak/route
+                openLinkDefaults).
+            -->
+            <intent-filter android:priority="999">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data
                     android:scheme="https"
                     android:host="thunderpeak.onelink.me" />
+            </intent-filter>
+
+            <!--
+                Fallback wildcard for any *.onelink.me subdomain that
+                AppsFlyer might spin up under this account in the
+                future. Same priority, same story.
+            -->
+            <intent-filter android:priority="999">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="*.onelink.me" />
             </intent-filter>
 
             <!--
